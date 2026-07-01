@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minimal Maps PWA</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#1a73e8">
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+    
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        body, html {
+            height: 100%;
+            overflow: hidden;
+        }
+
+        #map {
+            height: 100%;
+            width: 100%;
+            z-index: 1;
+        }
+
+        .ui-panel {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 1000;
+            width: 360px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            max-height: calc(100% - 20px);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        #pwa-banner {
+            display: none;
+            background: #e6f4ea;
+            border: 1px solid #ceead6;
+            padding: 10px;
+            border-radius: 6px;
+            flex-direction: column;
+            gap: 8px;
+            align-items: center;
+            text-align: center;
+        }
+        #pwa-banner p {
+            font-size: 13px;
+            color: #137333;
+            font-weight: 500;
+        }
+
+        .search-box {
+            display: flex;
+            gap: 8px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        button {
+            padding: 10px 14px;
+            background: #1a73e8;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        button:hover { background: #1557b0; }
+        button.secondary { background: #f1f3f4; color: #3c4043; }
+        button.secondary:hover { background: #e8eaed; }
+
+        .list-container {
+            overflow-y: auto;
+            max-height: 150px;
+            border-top: 1px solid #eee;
+            padding-top: 8px;
+        }
+
+        .list-title {
+            font-size: 12px;
+            font-weight: bold;
+            color: #70757a;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .place-item {
+            padding: 8px;
+            cursor: pointer;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+        }
+
+        .place-item:hover { background: #f1f3f4; }
+        .place-info { display: flex; flex-direction: column; flex: 1; }
+        .place-name { font-weight: 500; color: #202124; }
+        .place-coords { font-size: 11px; color: #70757a; }
+        .action-btn { background: none; color: #1a73e8; padding: 4px 8px; font-size: 12px; }
+        .action-btn:hover { background: #f1f3f4; color: #1557b0; }
+        .delete-btn { color: #d93025; }
+        .delete-btn:hover { background: #fce8e6; }
+
+        .popup-buttons { display: flex; gap: 5px; margin-top: 8px; }
+        .popup-buttons button { padding: 4px 8px; font-size: 11px; }
+    </style>
+</head>
+<body>
+
+    <div class="ui-panel">
+        <div id="pwa-banner">
+            <p>💡 Run this map as a standalone app!</p>
+            <button id="pwa-btn" style="width: 100%; background: #1e8e3e; color: white;">Upload this as PWA</button>
+        </div>
+
+        <div class="search-box">
+            <input type="text" id="search-input" placeholder="Search places..." />
+            <button id="search-btn">Search</button>
+        </div>
+
+        <button id="locate-btn" class="secondary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;">
+            📍 Find My Location
+        </button>
+
+        <div class="list-container">
+            <div class="list-title">Featured Hubs</div>
+            <div id="presets-list"></div>
+        </div>
+
+        <div class="list-container">
+            <div class="list-title">Saved Places</div>
+            <div id="saved-list"></div>
+        </div>
+        
+        <div id="nav-status" style="display:none; font-size: 13px; color: #202124; background: #e8f0fe; padding: 8px; border-radius: 4px; justify-content: space-between; align-items: center;">
+            <span>Route active</span>
+            <button class="action-btn delete-btn" onclick="clearRouting()" style="padding:2px 6px;">Clear Route</button>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+
+    <script>
+        // --- PWA LOGIC WITH GITHUB PAGES & IPAD ENGINE ---
+        let deferredPrompt;
+        const pwaBanner = document.getElementById('pwa-banner');
+        const pwaBtn = document.getElementById('pwa-btn');
+
+        // Dynamically compute subdirectory path to prevent sw.js failures
+        const repoPath = window.location.pathname.includes('index.html') 
+            ? window.location.pathname.replace('index.html', '') 
+            : window.location.pathname;
+
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register(`${repoPath}sw.js`)
+                .then(() => console.log('Service Worker Registered Safely'))
+                .catch(err => console.log('Service Worker Failed:', err));
+        }
+
+        const isRunningAsPWA = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+
+        if (!isRunningAsPWA) {
+            // Target iPadOS and iOS devices where explicit installation events are omitted
+            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+                          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+            
+            if (isIOS) {
+                pwaBanner.style.display = 'flex';
+                pwaBtn.innerText = "How to Install on iPad";
+                pwaBtn.style.background = "#8e24aa"; 
+                
+                pwaBtn.onclick = () => {
+                    alert("To install directly via iPad Chrome:\n1. Tap the Options/Share icon (three dots or share box menu).\n2. Scroll down and tap 'Add to Home Screen'.");
+                };
+            }
+        }
+
+        // Automatic prompt catch for devices that support intercept triggers
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            if (!isRunningAsPWA) { 
+                pwaBanner.style.display = 'flex'; 
+                pwaBtn.innerText = "Upload this as PWA";
+                pwaBtn.style.background = "#1e8e3e";
+                
+                pwaBtn.onclick = async () => {
+                    pwaBanner.style.display = 'none';
+                    deferredPrompt.prompt();
+                    await deferredPrompt.userChoice;
+                    deferredPrompt = null;
+                };
+            }
+        });
+
+        // --- MAP SETUP ---
+        const defaultLocation = [41.0082, 28.9784]; // Baseline fallback center
+        const map = L.map('map').setView(defaultLocation, 10);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        let searchMarker = null;
+        let routingControl = null;
+        let userLocation = null;
+        let currentLocMarker = null;
+
+        // --- ROBUST GEOLOCATION ENGINE ---
+        const geoOptions = {
+            enableHighAccuracy: true,
+            timeout: 10000, // 10-second ceiling timeout window
+            maximumAge: 0
+        };
+
+        function fetchLocation(shouldPan = false) {
+            if (!navigator.geolocation) return;
+            
+            navigator.geolocation.getCurrentPosition(
+                (pos) => {
+                    userLocation = [pos.coords.latitude, pos.coords.longitude];
+                    
+                    if (currentLocMarker) map.removeLayer(currentLocMarker);
+                    
+                    currentLocMarker = L.circleMarker(userLocation, {
+                        color: '#1a73e8',
+                        fillColor: '#1a73e8',
+                        fillOpacity: 0.4,
+                        radius: 8
+                    }).addTo(map).bindPopup("You are here");
+
+                    if (shouldPan) {
+                        map.flyTo(userLocation, 14);
+                        currentLocMarker.openPopup();
+                    }
+                    document.getElementById('locate-btn').innerText = "📍 Find My Location";
+                },
+                (err) => {
+                    console.warn(`Geolocation error: ${err.message}`);
+                    document.getElementById('locate-btn').innerText = "📍 Find My Location";
+                    if (shouldPan) {
+                        alert("Could not fetch location. Make sure device location is enabled for Chrome in iPad Settings.");
+                    }
+                }, 
+                geoOptions
+            );
+        }
+
+        // Run baseline request quietly on boot
+        fetchLocation(false);
+
+        document.getElementById('locate-btn').addEventListener('click', () => {
+            document.getElementById('locate-btn').innerText = "🌐 Locating...";
+            fetchLocation(true);
+        });
+
+        // --- PRESETS & PERSISTENCE ---
+        const hardcodedPlaces = [
+            { name: "Istanbul Airport (IST)", lat: 41.2751, lng: 28.7519 },
+            { name: "Sheremetyevo Airport (SVO)", lat: 55.9726, lng: 37.4146 },
+            { name: "Domodedovo Airport (DME)", lat: 55.4088, lng: 37.9061 }
+        ];
+
+        function getSavedPlaces() {
+            const data = localStorage.getItem('my_map_saved_places');
+            return data ? JSON.parse(data) : [];
+        }
+
+        function savePlace(name, lat, lng) {
+            const saved = getSavedPlaces();
+            if (!saved.some(p => p.lat === lat && p.lng === lng)) {
+                saved.push({ name, lat, lng });
+                localStorage.setItem('my_map_saved_places', JSON.stringify(saved));
+                renderSavedList();
+            }
+        }
+
+        function deleteSavedPlace(lat, lng) {
+            let saved = getSavedPlaces();
+            saved = saved.filter(p => p.lat !== lat || p.lng !== lng);
+            localStorage.setItem('my_map_saved_places', JSON.stringify(saved));
+            renderSavedList();
+        }
+
+        function flyToLocation(lat, lng, name = "") {
+            map.flyTo([lat, lng], 13);
+            const popupContent = `
+                <div>
+                    <strong>${name || 'Selected Location'}</strong><br>
+                    <span style="font-size:11px;color:#666">${lat.toFixed(4)}, ${lng.toFixed(4)}</span>
+                    <div class="popup-buttons">
+                        <button onclick="startRouting(${lat}, ${lng})">Directions</button>
+                        ${name ? '' : `<button class="secondary" onclick="savePlaceFromPopup(${lat}, ${lng})">⭐ Save</button>`}
+                    </div>
+                </div>
+            `;
+            L.popup().setLatLng([lat, lng]).setContent(popupContent).openOn(map);
+        }
+
+        function savePlaceFromPopup(lat, lng) {
+            const name = prompt("Enter a name:", `Location (${lat.toFixed(2)})`);
+            if (name) { savePlace(name, lat, lng); map.closePopup(); }
+        }
+
+        function startRouting(destLat, destLng) {
+            clearRouting();
+            const startPoint = userLocation ? userLocation : [map.getCenter().lat, map.getCenter().lng];
+            routingControl = L.Routing.control({
+                waypoints: [L.latLng(startPoint[0], startPoint[1]), L.latLng(destLat, destLng)],
+                routeWhileDragging: true,
+                lineOptions: { styles: [{ color: '#1a73e8', opacity: 0.8, weight: 6 }] },
+                createMarker: function() { return null; }
+            }).addTo(map);
+            document.getElementById('nav-status').style.display = 'flex';
+            map.closePopup();
+        }
+
+        function clearRouting() {
+            if (routingControl) { map.removeControl(routingControl); routingControl = null; }
+            document.getElementById('nav-status').style.display = 'none';
+        }
+
+        map.on('contextmenu', (e) => flyToLocation(e.latlng.lat, e.latlng.lng));
+
+        async function performSearch() {
+            const query = document.getElementById('search-input').value.trim();
+            if (!query) return;
+            const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`;
+            try {
+                const response = await fetch(url, { headers: { 'User-Agent': 'MinimalMapsApp/1.0' } });
+                const data = await response.json();
+                if (data && data.length > 0) {
+                    const lat = parseFloat(data[0].lat);
+                    const lng = parseFloat(data[0].lon);
+                    if (searchMarker) map.removeLayer(searchMarker);
+                    searchMarker = L.marker([lat, lng]).addTo(map);
+                    flyToLocation(lat, lng, data[0].display_name.split(',')[0]);
+                } else { alert("Location not found."); }
+            } catch (err) { alert("Network search error."); }
+        }
+
+        document.getElementById('search-btn').addEventListener('click', performSearch);
+        document.getElementById('search-input').addEventListener('keypress', (e) => { if (e.key === 'Enter') performSearch(); });
+
+        function renderHardcodedList() {
+            const container = document.getElementById('presets-list');
+            container.innerHTML = '';
+            hardcodedPlaces.forEach(place => {
+                const item = document.createElement('div');
+                item.className = 'place-item';
+                item.innerHTML = `<div class="place-info"><span class="place-name">${place.name}</span></div>`;
+                item.addEventListener('click', () => flyToLocation(place.lat, place.lng, place.name));
+                container.appendChild(item);
+                L.marker([place.lat, place.lng]).addTo(map).bindPopup(`<b>${place.name}</b>`);
+            });
+        }
+
+        function renderSavedList() {
+            const container = document.getElementById('saved-list');
+            container.innerHTML = '';
+            const saved = getSavedPlaces();
+            if (saved.length === 0) {
+                container.innerHTML = '<div style="font-size:13px; color:#aaa; padding:8px;">Right-click map to save custom pins.</div>';
+                return;
+            }
+            saved.forEach(place => {
+                const item = document.createElement('div');
+                item.className = 'place-item';
+                item.innerHTML = `
+                    <div class="place-info" onclick="flyToLocation(${place.lat}, ${place.lng}, '${place.name}')">
+                        <span class="place-name">⭐ ${place.name}</span>
+                    </div>
+                    <button class="action-btn delete-btn" onclick="event.stopPropagation(); deleteSavedPlace(${place.lat}, ${place.lng})">Remove</button>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        renderHardcodedList();
+        renderSavedList();
+    </script>
+</body>
+</html>
