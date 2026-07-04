@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minimal Maps PWA</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#1a73e8">
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+    
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+        body, html { height: 100%; overflow: hidden; }
+        #map { height: 100%; width: 100%; z-index: 1; }
+
+        /* Left Control UI Panel */
+        .ui-panel {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 1000;
+            width: 360px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            max-height: calc(100% - 20px);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .search-box { display: flex; gap: 8px; }
+        input[type="text"] { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+        
+        button { padding: 10px 14px; background: #1a73e8; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; font-size: 14px; }
+        button:hover { background: #1557b0; }
+        button.secondary { background: #f1f3f4; color: #3c4043; }
+        button.secondary:hover { background: #e8eaed; }
+        button.danger { background: #d93025; color: white; }
+        button.danger:hover { background: #b31412; }
+
+        /* POI Quick Icons Grid */
+        .poi-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 6px;
+        }
+        .poi-btn {
+            background: #f8f9fa;
+            border: 1px solid #dadce0;
+            border-radius: 6px;
+            padding: 8px 4px;
+            font-size: 11px;
+            color: #3c4043;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+        }
+        .poi-btn:hover { background: #f1f3f4; }
+        .poi-btn span { font-size: 18px; }
+
+        /* Custom Dynamic Color Markers (using Leaflet DivIcon) */
+        .custom-pin {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 30px;
+            height: 30px;
+            border-radius: 50% 50% 50% 0;
+            transform: rotate(-45deg);
+            box-shadow: -1px 1px 4px rgba(0,0,0,0.3);
+            border: 1px solid rgba(255,255,255,0.4);
+        }
+        .custom-pin span {
+            transform: rotate(45deg);
+            font-size: 14px;
+        }
+
+        /* Generic Centerable Overlays / Modals */
+        .modal {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 2000;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+            width: 340px;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; font-weight: bold; }
+        .close-modal { background: none; color: #666; font-size: 20px; padding: 0; cursor: pointer; }
+        .close-modal:hover { color: #000; }
+
+        .list-scroll { max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+        .list-entry { display: flex; justify-content: space-between; align-items: center; padding: 6px; background: #f8f9fa; border-radius: 4px; }
+
+        /* Navigation Bottom HUD popup */
+        .nav-hud {
+            display: none;
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            background: white;
+            padding: 15px 25px;
+            border-radius: 30px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+            align-items: center;
+            gap: 15px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Main Left UI Dashboard -->
+    <div class="ui-panel">
+        <div class="search-box">
+            <input type="text" id="search-input" placeholder="Search places..." />
+            <button id="search-btn">Search</button>
+        </div>
+
+        <button id="locate-btn" class="secondary">📍 Find My Location</button>
+
+        <!-- POI Category Filter Box -->
+        <div class="poi-grid">
+            <div class="poi-btn" onclick="searchPOI('amenity=restaurant|cafe|fast_food', '🍝', '#ea4335')"><span>🍝</span>Food</div>
+            <div class="poi-btn" onclick="searchPOI('shop=supermarket', '🛍️', '#4285f4')"><span>🛍️</span>Markets</div>
+            <div class="poi-btn" onclick="searchPOI('shop=convenience|grocery', '🛒', '#9c27b0')"><span>🛒</span>Grocery</div>
+            <div class="poi-btn" onclick="searchPOI('tourism=hotel|motel|guest_house', '🏨', '#ff9800')"><span>🏨</span>Hotels</div>
+            <div class="poi-btn" onclick="searchPOI('amenity=hospital|clinic', '🏥', '#e91e63')"><span>🏥</span>Hospitals</div>
+            <div class="poi-btn" onclick="searchPOI('aeroway=aerodrome', '✈️', '#009688')"><span>✈️</span>Airports</div>
+            <div class="poi-btn" onclick="searchPOI('leisure=park', '🌳', '#4caf50')"><span>🌳</span>Parks</div>
+            <div class="poi-btn" onclick="searchPOI('natural=beach|sand', '🏖️', '#ffeb3b')"><span>🏖️</span>Beaches</div>
+        </div>
+
+        <!-- Menu Action Hub -->
+        <div style="display: flex; gap: 8px;">
+            <button class="secondary" onclick="openListsModal()" style="flex:1;">📂 Lists</button>
+            <button class="secondary" onclick="openCacheModal()" style="flex:1;">⚙️ Cache</button>
+        </div>
+    </div>
+
+    <!-- Active Navigation HUD Pop-up -->
+    <div id="nav-hud-popup" class="nav-hud">
+        <span id="nav-hud-text" style="font-weight: 500; font-size: 14px;">Route Calculated</span>
+        <button id="start-nav-btn" onclick="triggerLiveNavigation()">Start Route</button>
+        <button class="secondary" onclick="clearRouting()" style="padding: 10px;">❌</button>
+    </div>
+
+    <!-- Lists Submenu Window -->
+    <div id="lists-modal" class="modal">
+        <div class="modal-header">
+            <span>My Custom Lists</span>
+            <button class="close-modal" onclick="closeModal('lists-modal')">&times;</button>
+        </div>
+        <div class="search-box">
+            <input type="text" id="new-list-name" placeholder="Create new list name..." />
+            <button onclick="createNewList()">Create</button>
+        </div>
+        <div class="list-scroll" id="lists-container"></div>
+    </div>
+
+    <!-- Cache Warning Hub Window -->
+    <div id="cache-modal" class="modal">
+        <div class="modal-header">
+            <span>Cache Configuration</span>
+            <button class="close-modal" onclick="closeModal('cache-modal')">&times;</button>
+        </div>
+        <p style="font-size: 13px; color: #d93025; font-weight: 500;">
+            ⚠️ WARNING: Clearing the ghost cache right now will wipe out all of your saved lists!
+        </p>
+        <button class="danger" onclick="nuclearResetApp()">Confirm Clear Ghost Cache</button>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+
+    <script>
+        // --- DATA & CONFIG MANAGEMENT ---
+        async function nuclearResetApp() {
+            if ('serviceWorker' in navigator) {
+                const regs = await navigator.serviceWorker.getRegistrations();
+                for (let r of regs) await r.unregister();
+            }
+            if ('caches' in window) {
+                const keys = await caches.keys();
+                for (let k of keys) await caches.delete(k);
+            }
+            localStorage.clear();
+            alert("Sandbox fully wiped. Reloading...");
+            window.location.reload(true);
+        }
+
+        function getLists() {
+            const data = localStorage.getItem('map_custom_lists');
+            return data ? JSON.parse(data) : { "Favorites": [] };
+        }
+        function saveLists(lists) { localStorage.setItem('map_custom_lists', JSON.stringify(lists)); }
+
+        // --- CORE MAP ENGINE DEPLOYMENT ---
+        const map = L.map('map').setView([41.0082, 28.9784], 11);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OSM' }).addTo(map);
+
+        let searchMarker = null;
+        let poiMarkersGroup = [];
+        let routingControl = null;
+        
+        let userLocation = null;
+        let liveTrackingWatchId = null;
+        let currentLocMarker = null;
+        let targetNavigationCoords = null;
+
+        // --- GEOLOCATION CORE ---
+        function updateLocationMarker(lat, lng) {
+            userLocation = [lat, lng];
+            if (currentLocMarker) map.removeLayer(currentLocMarker);
+            currentLocMarker = L.circleMarker(userLocation, { color: '#1a73e8', fillColor: '#1a73e8', fillOpacity: 0.4, radius: 9 }).addTo(map);
+        }
+
+        navigator.geolocation.getCurrentPosition(pos => {
+            updateLocationMarker(pos.coords.latitude, pos.coords.longitude);
+            map.setView(userLocation, 12);
+        }, () => console.log("Initial location acquisition failed. Check iPad settings."), { enableHighAccuracy: true });
+
+        document.getElementById('locate-btn').addEventListener('click', () => {
+            navigator.geolocation.getCurrentPosition(pos => {
+                updateLocationMarker(pos.coords.latitude, pos.coords.longitude);
+                map.flyTo(userLocation, 14);
+            }, () => alert("Could not fetch location."), { enableHighAccuracy: true });
+        });
+
+        // --- LIVE REALTIME NAVIGATION ROUTING ENGINE ---
+        function startRouting(destLat, destLng) {
+            clearRouting();
+            targetNavigationCoords = { lat: destLat, lng: destLng };
+            const startPoint = userLocation || [map.getCenter().lat, map.getCenter().lng];
+            
+            routingControl = L.Routing.control({
+                waypoints: [L.latLng(startPoint[0], startPoint[1]), L.latLng(destLat, destLng)],
+                routeWhileDragging: false,
+                lineOptions: { styles: [{ color: '#1a73e8', opacity: 0.8, weight: 6 }] },
+                createMarker: () => null
+            }).addTo(map);
+
+            document.getElementById('nav-hud-popup').style.display = 'flex';
+            map.closePopup();
+        }
+
+        function triggerLiveNavigation() {
+            document.getElementById('nav-hud-popup').style.display = 'none';
+            if (liveTrackingWatchId) navigator.geolocation.clearWatch(liveTrackingWatchId);
+
+            // Hook into the native GPS core to monitor movements live like Google Maps
+            liveTrackingWatchId = navigator.geolocation.watchPosition(pos => {
+                const lat = pos.coords.latitude;
+                const lng = pos.coords.longitude;
+                updateLocationMarker(lat, lng);
+
+                // Recalculate route engine vectors smoothly on the fly
+                if (routingControl && targetNavigationCoords) {
+                    routingControl.setWaypoints([
+                        L.latLng(lat, lng),
+                        L.latLng(targetNavigationCoords.lat, targetNavigationCoords.lng)
+                    ]);
+                }
+                map.panTo([lat, lng]);
+            }, err => console.warn(err), { enableHighAccuracy: true, maximumAge: 0 });
+        }
+
+        function clearRouting() {
+            if (routingControl) { map.removeControl(routingControl); routingControl = null; }
+            if (liveTrackingWatchId) { navigator.geolocation.clearWatch(liveTrackingWatchId); liveTrackingWatchId = null; }
+            if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
+            targetNavigationCoords = null;
+            document.getElementById('nav-hud-popup').style.display = 'none';
+        }
+
+        // --- POI ENGINE NEAREST SEARCHES ---
+        function clearPOIMarkers() {
+            poiMarkersGroup.forEach(m => map.removeLayer(m));
+            poiMarkersGroup = [];
+        }
+
+        async function searchPOI(osmKeyVal, emoji, colorCode) {
+            clearPOIMarkers();
+            const center = map.getCenter();
+            // Search inside a bounding box around current view focus coordinates
+            const bbox = map.getBounds();
+            const url = `https://nominatim.openstreetmap.org/search?format=json&q=[${osmKeyVal}]&viewbox=${bbox.getWest()},${bbox.getNorth()},${bbox.getEast()},${bbox.getSouth()}&bounded=1&limit=25`;
+
+            try {
+                const res = await fetch(url, { headers: { 'User-Agent': 'MinimalMapsApp/1.0' } });
+                const data = await res.json();
+                
+                if (!data || data.length === 0) {
+                    alert("No matching points found in this map view region.");
+                    return;
+                }
+
+                data.forEach(item => {
+                    const lat = parseFloat(item.lat);
+                    const lng = parseFloat(item.lon);
+                    const name = item.display_name.split(',')[0];
+
+                    // Generate dynamic HTML color pin injection components
+                    const htmlPinStructure = `<div class="custom-pin" style="background-color: ${colorCode};"><span>${emoji}</span></div>`;
+                    
+                    const customMarkerIcon = L.divIcon({
+                        html: htmlPinStructure,
+                        className: 'clear-leaflet-bg',
+                        iconSize: [30, 42],
+                        iconAnchor: [15, 42]
+                    });
+
+                    const marker = L.marker([lat, lng], { icon: customMarkerIcon }).addTo(map);
+                    
+                    const popupHTML = `
+                        <div>
+                            <strong>${name}</strong><br>
+                            <div style="margin-top:8px; display:flex; gap:4px;">
+                                <button onclick="startRouting(${lat}, ${lng})">Directions</button>
+                                <button class="secondary" onclick="addLocationToListPrompt(${lat}, ${lng}, '${name.replace(/'/g, "\\'")}')">➕ Add</button>
+                            </div>
+                        </div>
+                    `;
+                    marker.bindPopup(popupHTML);
+                    poiMarkersGroup.push(marker);
+                });
+            } catch (e) { alert("Error pulling down category indicators."); }
+        }
+
+        // --- ADDRESS EXTENDED SEARCH ---
+        async function performSearch() {
+            const query = document.getElementById('search-input').value.trim();
+            if (!query) return;
+            const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`;
+            try {
+                const response = await fetch(url, { headers: { 'User-Agent': 'MinimalMapsApp/1.0' } });
+                const data = await response.json();
+                if (data && data.length > 0) {
+                    const lat = parseFloat(data[0].lat);
+                    const lng = parseFloat(data[0].lon);
+                    if (searchMarker) map.removeLayer(searchMarker);
+                    
+                    const name = data[0].display_name.split(',')[0];
+                    searchMarker = L.marker([lat, lng]).addTo(map);
+                    
+                    const content = `
+                        <div>
+                            <strong>${name}</strong><br>
+                            <div style="margin-top:8px; display:flex; gap:4px;">
+                                <button onclick="startRouting(${lat}, ${lng})">Directions</button>
+                                <button class="secondary" onclick="addLocationToListPrompt(${lat}, ${lng}, '${name.replace(/'/g, "\\'")}')">➕ Add</button>
+                                <button class="danger" onclick="clearRouting()" style="padding:4px 6px;">Remove</button>
+                            </div>
+                        </div>
+                    `;
+                    searchMarker.bindPopup(content).openPopup();
+                    map.flyTo([lat, lng], 13);
+                } else { alert("Location not found."); }
+            } catch (err) { alert("Search failed."); }
+        }
+        document.getElementById('search-btn').addEventListener('click', performSearch);
+        document.getElementById('search-input').addEventListener('keypress', (e) => { if (e.key === 'Enter') performSearch(); });
+
+        // --- SUBMENU STATE MODAL CONTROLLERS ---
+        function openListsModal() { document.getElementById('lists-modal').style.display = 'flex'; renderListsMenu(); }
+        function openCacheModal() { document.getElementById('cache-modal').style.display = 'flex'; }
+        function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+
+        // --- CUSTOM USER LIST HOOK LOGIC ---
+        function createNewList() {
+            const input = document.getElementById('new-list-name');
+            const name = input.value.trim();
+            if (!name) return;
+            const lists = getLists();
+            if (!lists[name]) {
+                lists[name] = [];
+                saveLists(lists);
+                input.value = '';
+                renderListsMenu();
+            }
+        }
+
+        function renameList(oldName) {
+            const newName = prompt("Enter new list name:", oldName);
+            if (!newName || newName.trim() === "" || oldName === newName) return;
+            const lists = getLists();
+            lists[newName] = lists[oldName];
+            delete lists[oldName];
+            saveLists(lists);
+            renderListsMenu();
+        }
+
+        function deleteList(name) {
+            if (!confirm(`Delete list "${name}"?`)) return;
+            const lists = getLists();
+            delete lists[name];
+            saveLists(lists);
+            renderListsMenu();
+        }
+
+        function addLocationToListPrompt(lat, lng, locName) {
+            const lists = getLists();
+            const keys = Object.keys(lists);
+            if (keys.length === 0) { alert("Create a list in the options panel first!"); return; }
+            
+            const selection = prompt(`Type the exact list name to add this item to:\nOptions: ${keys.join(', ')}`);
+            if (selection && lists[selection]) {
+                lists[selection].push({ name: locName, lat: lat, lng: lng });
+                saveLists(lists);
+                alert(`Added to ${selection}!`);
+                map.closePopup();
+            } else if (selection) {
+                alert("List not recognized.");
+            }
+        }
+
+        function jumpToSavedPoint(lat, lng, name) {
+            closeModal('lists-modal');
+            map.flyTo([lat, lng], 14);
+            L.popup().setLatLng([lat, lng]).setContent(`<b>${name}</b><br><button onclick="startRouting(${lat}, ${lng})">Directions</button>`).openOn(map);
+        }
+
+        function renderListsMenu() {
+            const container = document.getElementById('lists-container');
+            container.innerHTML = '';
+            const lists = getLists();
+
+            Object.keys(lists).forEach(listName => {
+                const item = document.createElement('div');
+                item.style.borderBottom = "1px dashed #ddd";
+                item.style.paddingBottom = "8px";
+                
+                let pointsHTML = '';
+                lists[listName].forEach(p => {
+                    pointsHTML += `
+                        <div style="font-size:12px; color:#1a73e8; margin-left:12px; cursor:pointer; padding:2px 0;" onclick="jumpToSavedPoint(${p.lat}, ${p.lng}, '${p.name.replace(/'/g, "\\'")}')">
+                            📍 ${p.name}
+                        </div>
+                    `;
+                });
+
+                item.innerHTML = `
+                    <div class="list-entry">
+                        <strong style="font-size:14px;">📁 ${listName} (${lists[listName].length})</strong>
+                        <div>
+                            <button onclick="renameList('${listName}')" style="padding:2px 6px; font-size:10px;" class="secondary">✏️</button>
+                            <button onclick="deleteList('${listName}')" style="padding:2px 6px; font-size:10px;" class="danger">🗑️</button>
+                        </div>
+                    </div>
+                    ${pointsHTML || '<div style="font-size:11px; color:#aaa; margin-left:12px;">Empty list</div>'}
+                `;
+                container.appendChild(item);
+            });
+        }
+    </script>
+</body>
+</html>
